@@ -258,7 +258,7 @@ class PacmanPackageManager(PackageManager):
     def __init__(self) -> None:
         super().__init__()
         self._update_command = "sudo pacman --sync --refresh --refresh"
-        self._package_exists_command = "pacman -Si"  # plus pkg
+        self._package_exists_command = "pacman -Ssq"  # plus pkg
         self._package_is_installed_command = "pacman -Qe"  # plus pkg
         self._package_install_command = "sudo pacman -S --noconfirm --needed"  # plus pkg
 
