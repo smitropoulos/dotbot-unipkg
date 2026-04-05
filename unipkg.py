@@ -4,12 +4,20 @@ import shlex
 import subprocess
 import sys
 from abc import ABC
+from enum import Enum, auto
 from shutil import which
 from typing import ClassVar
 
 import dotbot
 
 plugin_name = "Unipkg"
+
+
+class PackageStatus(Enum):
+    SUCCESS = auto()
+    ALREADY_INSTALLED = auto()
+    NOT_FOUND = auto()
+    INSTALL_FAILED = auto()
 
 
 class UniPkg(dotbot.Plugin):
@@ -55,20 +63,31 @@ class UniPkg(dotbot.Plugin):
                 )
                 continue
 
-            install_success = self._packageManager.package_install(
+            # try primary name
+            status = self._packageManager.package_install(
                 install_entry.package_name, verbose=effective_verbose
             )
-            # try alternative names if present
-            if not install_success and len(install_entry.package_name_alt) != 0:
+
+            # try alternative names if primary failed or was not found
+            if (
+                status in (PackageStatus.INSTALL_FAILED, PackageStatus.NOT_FOUND)
+                and len(install_entry.package_name_alt) != 0
+            ):
                 for alt_name in install_entry.package_name_alt:
-                    install_success = self._packageManager.package_install(
+                    status = self._packageManager.package_install(
                         alt_name, verbose=effective_verbose
                     )
-            if not install_success:
-                # instead of bailing, continue and log this
-                self._log_error(f"error installing {install_entry}")
-            else:
+                    if status in (PackageStatus.SUCCESS, PackageStatus.ALREADY_INSTALLED):
+                        break
+
+            if status == PackageStatus.SUCCESS:
                 self._log_info(f"installed {install_entry}")
+            elif status == PackageStatus.ALREADY_INSTALLED:
+                self._log_info(f"{install_entry.package_name} is already installed - skipping")
+            elif status == PackageStatus.NOT_FOUND:
+                self._log_error(f"package not found in repositories: {install_entry}")
+            else:
+                self._log_error(f"error installing {install_entry}")
 
         self._log_info("done")
         return True
@@ -202,10 +221,11 @@ class DirectivesParser:
 
 
 def run_in_shell(cmd: str, *, verbose: bool = False) -> bool:
-    if not verbose:
-        stdout = stderr = subprocess.DEVNULL
-    else:
+    if verbose:
+        print(f"  $ {cmd}")
         stdout = stderr = None
+    else:
+        stdout = stderr = subprocess.DEVNULL
 
     result = subprocess.call(cmd, shell=True, stdout=stdout, stderr=stderr)
     return result == 0
@@ -214,22 +234,23 @@ def run_in_shell(cmd: str, *, verbose: bool = False) -> bool:
 class PackageManager(ABC):
     """package manager interface"""
 
-    def package_install(self, package: str, verbose: bool = False) -> bool:
+    def package_install(self, package: str, verbose: bool = False) -> PackageStatus:
         """install a package
 
         Returns:
-            success
+            PackageStatus
         """
-        # check if package is installed
-        if self.package_is_installed(package, verbose=verbose):
-            return True
+        # check if package is installed (always quiet)
+        if self.package_is_installed(package, verbose=False):
+            return PackageStatus.ALREADY_INSTALLED
 
-        # check if package exists in repos
-        if not self.package_exists(package, verbose=verbose):
-            return False
+        # check if package exists in repos (always quiet)
+        if not self.package_exists(package, verbose=False):
+            return PackageStatus.NOT_FOUND
 
         cmd = f"{self._package_install_command} {shlex.quote(package)}"
-        return run_in_shell(cmd, verbose=verbose)
+        success = run_in_shell(cmd, verbose=verbose)
+        return PackageStatus.SUCCESS if success else PackageStatus.INSTALL_FAILED
 
     def update(self, verbose: bool = False) -> None:
         """update the caches"""
@@ -259,7 +280,7 @@ class PacmanPackageManager(PackageManager):
         super().__init__()
         self._update_command = "sudo pacman --sync --refresh --refresh"
         self._package_exists_command = "pacman -Ssq"  # plus pkg
-        self._package_is_installed_command = "pacman -Qe"  # plus pkg
+        self._package_is_installed_command = "pacman -Qq"  # plus pkg
         self._package_install_command = "sudo pacman -S --noconfirm --needed"  # plus pkg
 
     def package_exists(self, package: str, verbose: bool = False) -> bool:
