@@ -9,7 +9,6 @@ from typing import ClassVar
 
 import dotbot
 
-unipkg_silent_toggle = True
 plugin_name = "Unipkg"
 
 
@@ -38,10 +37,17 @@ class UniPkg(dotbot.Plugin):
 
         if directives.update is True:
             self._log_info("Updating repos ...")
-            self._packageManager.update()
+            self._packageManager.update(verbose=directives.verbose)
 
         filtering = OsFiltering()
         for install_entry in directives.install_entries:
+            # effective verbose is entry level if set, else global
+            effective_verbose = (
+                install_entry.verbose
+                if install_entry.verbose is not None
+                else directives.verbose
+            )
+
             self._log_info(f"Installing {install_entry}")
             if filtering.filter_out(install_entry):
                 self._log_info(
@@ -49,11 +55,15 @@ class UniPkg(dotbot.Plugin):
                 )
                 continue
 
-            install_success = self._packageManager.package_install(install_entry.package_name)
+            install_success = self._packageManager.package_install(
+                install_entry.package_name, verbose=effective_verbose
+            )
             # try alternative names if present
             if not install_success and len(install_entry.package_name_alt) != 0:
                 for alt_name in install_entry.package_name_alt:
-                    install_success = self._packageManager.package_install(alt_name)
+                    install_success = self._packageManager.package_install(
+                        alt_name, verbose=effective_verbose
+                    )
             if not install_success:
                 # instead of bailing, continue and log this
                 self._log_error(f"error installing {install_entry}")
@@ -91,6 +101,7 @@ class Directives:
     """Holds all parsed directives from the configuration."""
 
     update: bool = False
+    verbose: bool = False
     install_entries: list[InstallEntry] = []  # noqa: RUF012
 
 
@@ -100,11 +111,13 @@ class InstallEntry:
         name: str | None = None,
         alts: list[str] | None = None,
         filters: list[str] | None = None,
+        verbose: bool | None = None,
     ) -> None:
         """Initializes the Package object."""
         self.package_name = name if name is not None else ""
         self.package_name_alt = alts if alts is not None else []
         self.filters = filters if filters is not None else []
+        self.verbose = verbose
 
     def __repr__(self) -> str:
         """Provides a clean, readable string representation."""
@@ -143,6 +156,9 @@ class DirectivesParser:
         elif isinstance(package_filter, list):
             entry.filters = package_filter
 
+        # Safely get verbose
+        entry.verbose = attributes.get("verbose")
+
     def _parse_install_list(self, packages_data: list) -> list[InstallEntry]:
         """Parses a list of packages containing mixed types (strings and dicts)."""
         parsed_entries = []
@@ -170,6 +186,12 @@ class DirectivesParser:
             if isinstance(item, str) and item == self._updateSubDirective:
                 directives.update = True
 
+            elif isinstance(item, dict) and self._updateSubDirective in item:
+                directives.update = item[self._updateSubDirective]
+
+            elif isinstance(item, dict) and "verbose" in item:
+                directives.verbose = item["verbose"]
+
             elif isinstance(item, dict) and self._installSubDirective in item:
                 packages_list = item[self._installSubDirective]
                 # Delegate the mixed-type list to the helper
@@ -179,8 +201,8 @@ class DirectivesParser:
         return directives
 
 
-def run_in_shell(cmd: str, *, silent: bool = True) -> bool:
-    if silent:
+def run_in_shell(cmd: str, *, verbose: bool = False) -> bool:
+    if not verbose:
         stdout = stderr = subprocess.DEVNULL
     else:
         stdout = stderr = None
@@ -192,44 +214,44 @@ def run_in_shell(cmd: str, *, silent: bool = True) -> bool:
 class PackageManager(ABC):
     """package manager interface"""
 
-    def package_install(self, package: str) -> bool:
+    def package_install(self, package: str, verbose: bool = False) -> bool:
         """install a package
 
         Returns:
             success
         """
         # check if package is installed
-        if self.package_is_installed(package):
+        if self.package_is_installed(package, verbose=verbose):
             return True
 
         # check if package exists in repos
-        if not self.package_exists(package):
+        if not self.package_exists(package, verbose=verbose):
             return False
 
         cmd = f"{self._package_install_command} {shlex.quote(package)}"
-        return run_in_shell(cmd, silent=unipkg_silent_toggle)
+        return run_in_shell(cmd, verbose=verbose)
 
-    def update(self) -> None:
+    def update(self, verbose: bool = False) -> None:
         """update the caches"""
-        run_in_shell(self._update_command, silent=unipkg_silent_toggle)
+        run_in_shell(self._update_command, verbose=verbose)
 
-    def package_exists(self, package: str) -> bool:
+    def package_exists(self, package: str, verbose: bool = False) -> bool:
         """check if the package exists in the remote
 
         Returns:
             success
         """
         cmd = f"{self._package_exists_command} {shlex.quote(package)}"
-        return run_in_shell(cmd, silent=unipkg_silent_toggle)
+        return run_in_shell(cmd, verbose=verbose)
 
-    def package_is_installed(self, package: str) -> bool:
+    def package_is_installed(self, package: str, verbose: bool = False) -> bool:
         """checks if the packages is already installed
 
         Returns:
             true if installed, false if not
         """
         cmd = f"{self._package_is_installed_command} {shlex.quote(package)}"
-        return run_in_shell(cmd, silent=unipkg_silent_toggle)
+        return run_in_shell(cmd, verbose=verbose)
 
 
 class PacmanPackageManager(PackageManager):
@@ -240,10 +262,10 @@ class PacmanPackageManager(PackageManager):
         self._package_is_installed_command = "pacman -Qe"  # plus pkg
         self._package_install_command = "sudo pacman -S --noconfirm --needed"  # plus pkg
 
-    def package_exists(self, package: str) -> bool:
+    def package_exists(self, package: str, verbose: bool = False) -> bool:
         # regex here be specific
         cmd = f"{self._package_exists_command} ^{shlex.quote(package)}$"
-        return run_in_shell(cmd, silent=unipkg_silent_toggle)
+        return run_in_shell(cmd, verbose=verbose)
 
 
 class AptPackageManager(PackageManager):

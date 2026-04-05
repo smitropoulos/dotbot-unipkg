@@ -46,24 +46,39 @@ UNIPKGPLUGIN="${BASEDIR}/dotbot-plugins/dotbot-unipkg/unipkg.py"
 
 ## Usage
 
-The plugin introduces the `unipkg` directive. It supports two main sub-directives:
+The plugin introduces the `unipkg` directive. It supports several configuration options:
 
 - `update`: Updates the package manager's local cache.
+- `verbose`: Enables verbose output for package manager commands.
 - `install`: A list of packages to ensure are installed.
 
 ### Basic Example
 
 ```yaml
 - unipkg:
-    - update
-    - install:
-        - neovim
-        - ripgrep
-        - lsd
-        - zoxide
+    update: true
+    verbose: true # Show output for all commands
+    install:
+      - neovim
+      - ripgrep
+      - lsd
+      - zoxide
 ```
 
 ### Advanced Configuration
+
+#### Granular Verbosity
+
+You can set a global `verbose` flag and override it for specific packages.
+
+```yaml
+- unipkg:
+    verbose: true # Global default: show output for all commands
+    install:
+      - nvim
+      - tmux:
+          verbose: false # Local override: silence this specific package
+```
 
 #### Alternative Names
 
